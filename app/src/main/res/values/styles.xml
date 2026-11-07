@@ -1,0 +1,43 @@
+<resources>
+    <!-- Tema "noite": tinta azul profunda, amarelo do cabo monomodo como cor da marca. -->
+    <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">@font/barlow_regular</item>
+        <item name="android:colorAccent">#FFC93C</item>
+        <item name="android:windowBackground">#0D1420</item>
+        <item name="android:colorBackground">#0D1420</item>
+        <item name="android:statusBarColor">#0D1420</item>
+        <item name="android:navigationBarColor">#0D1420</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:alertDialogTheme">@style/AppDialog</item>
+    </style>
+
+    <!-- Tema "dia". -->
+    <style name="AppTheme.Light" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">@font/barlow_regular</item>
+        <item name="android:colorAccent">#8F6400</item>
+        <item name="android:windowBackground">#EEF1F5</item>
+        <item name="android:colorBackground">#EEF1F5</item>
+        <item name="android:statusBarColor">#EEF1F5</item>
+        <item name="android:navigationBarColor">#EEF1F5</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:alertDialogTheme">@style/AppDialog.Light</item>
+    </style>
+
+    <style name="AppDialog" parent="android:style/Theme.Material.Dialog.Alert">
+        <item name="android:fontFamily">@font/barlow_regular</item>
+        <item name="android:colorAccent">#FFC93C</item>
+        <item name="android:windowBackground">@drawable/dialog_bg_dark</item>
+        <item name="android:textColorPrimary">#EDF1F7</item>
+        <item name="android:textColorSecondary">#93A0B5</item>
+    </style>
+
+    <style name="AppDialog.Light" parent="android:style/Theme.Material.Light.Dialog.Alert">
+        <item name="android:fontFamily">@font/barlow_regular</item>
+        <item name="android:colorAccent">#8F6400</item>
+        <item name="android:windowBackground">@drawable/dialog_bg_light</item>
+        <item name="android:textColorPrimary">#101826</item>
+        <item name="android:textColorSecondary">#5E6B80</item>
+    </style>
+</resources>
