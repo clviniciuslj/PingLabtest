@@ -9,44 +9,36 @@ import android.graphics.Path
 import android.graphics.Shader
 import android.view.View
 import kotlin.math.abs
-import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
-import kotlin.math.sqrt
 
 /**
  * Gráfico de latência em tempo real, com uma ou mais séries.
  *
- * Cada curva é uma interpolação cúbica monotônica (Fritsch–Carlson), amostrada pixel a pixel, então
- * nunca "estoura" abaixo de zero nem faz picos falsos. O eixo X é o tempo real e a ponta direita é
- * "agora": entre uma resposta e outra a curva é estendida até lá, então a linha anda continuamente.
+ * Cada série é uma linha em degraus: o valor de uma resposta fica reto até a próxima chegar, e o valor
+ * novo aparece como um salto vertical. O eixo X é o tempo real e a ponta direita é "agora": entre uma
+ * resposta e outra a linha é estendida até lá, então ela anda continuamente. A escala (à direita, fora do
+ * gráfico) usa passos redondos e troca de uma vez quando o maior valor visível muda de faixa.
  *
  * Com uma série só, a curva ganha preenchimento e o ponto atual muda de cor conforme a latência.
  * Com várias, cada série usa a sua cor.
  */
 class LatencyChartView(context: Context) : View(context) {
 
-    /** [v] é o valor real; [dv] é o valor desenhado (difere de [v] só enquanto a amostra "desliza" até o lugar). */
     private class Sample(val t: Long, val v: Float) {
-        var dv: Float = v
         val lost: Boolean get() = v < 0f
     }
 
     private class Series(val color: Int) {
         val samples = ArrayList<Sample>()
-        var tangents = FloatArray(64)
-        var easing: Sample? = null
-        var easeFrom = 0f
-        var easeStart = 0L
     }
 
     companion object {
         const val IDLE_TEXT = "Inicie um ping para ver a latência"
 
         private const val HEAD_GRACE_MS = 2500L
-        private const val EASE_MS = 380f
         private const val WINDOW_MS = 60_000L
 
         // A linha anda poucos pixels por segundo: 30 quadros/s ficam iguais a 60/120 e gastam menos bateria.
@@ -59,6 +51,9 @@ class LatencyChartView(context: Context) : View(context) {
         private val SCALE_STEPS = floatArrayOf(
             20f, 30f, 50f, 80f, 100f, 150f, 200f, 300f, 500f, 800f, 1000f, 2000f, 5000f
         )
+
+        /** Quantas faixas cada escala tem, para os números da grade saírem redondos (50: 10, 20…; 100: 25, 50…). */
+        private val SCALE_DIVISIONS = intArrayOf(4, 3, 5, 4, 4, 3, 4, 3, 5, 4, 4, 4, 5)
 
         fun colorFor(ms: Double): Int = when {
             ms < 60 -> GOOD
@@ -83,6 +78,7 @@ class LatencyChartView(context: Context) : View(context) {
     private var lastFrame = 0L
     private var runHeadX = 0f
 
+    private val textBounds = android.graphics.Rect()
     private val path = Path()
     private val fillPath = Path()
     private val frameTick = Runnable { invalidate() }
@@ -145,15 +141,6 @@ class LatencyChartView(context: Context) : View(context) {
         while (i > 0 && list[i - 1].t > sample.t) i--
         list.add(i, sample)
 
-        // Amostra nova no fim: o valor desliza do anterior até o real em vez de saltar.
-        if (!sample.lost && i == list.size - 1) {
-            val previous = list.getOrNull(i - 1)?.takeIf { !it.lost }
-            s.easing = sample
-            s.easeFrom = previous?.dv ?: sample.v
-            s.easeStart = System.currentTimeMillis()
-            sample.dv = s.easeFrom
-        }
-
         val cutoff = System.currentTimeMillis() - WINDOW_MS * 2
         while (list.size > 2 && list[0].t < cutoff) list.removeAt(0)
 
@@ -208,7 +195,8 @@ class LatencyChartView(context: Context) : View(context) {
 
         val top = dp(10f)
         val bottom = h - dp(12f)
-        val xRight = w - dp(8f)
+        // À direita fica a faixa dos números da escala, fora da área do gráfico.
+        val xRight = w - dp(36f)
         val winStart = displayT - WINDOW_MS
 
         // Escala vertical suave (considera todas as séries).
@@ -220,30 +208,30 @@ class LatencyChartView(context: Context) : View(context) {
                 }
             }
         }
-        val targetMax = niceCeil(max(visibleMax * 1.2f, 20f))
-        val maxDiff = targetMax - curMax
-        if (abs(maxDiff) > 0.4f) {
-            curMax += maxDiff * (1f - exp(-dt / 160f))
-            animating = true
-        } else {
-            curMax = targetMax
-        }
+        // Escala mínima de 50 ms; só sobe quando o maior valor passa da faixa, sem folga extra.
+        curMax = niceCeil(max(visibleMax, 50f))
 
         fun xOf(t: Long): Float = xRight - (displayT - t).toFloat() / WINDOW_MS * xRight
         fun yOf(v: Float): Float = bottom - (v / curMax).coerceIn(0f, 1.04f) * (bottom - top)
 
-        // Grade
-        for (i in 1..3) {
-            val frac = i / 3f
+        // Grade: linhas horizontais nos números redondos (valores à direita) e duas verticais fixas nos terços.
+        val divisions = divisionsFor(curMax)
+        val labelOffset = (labelPaint.descent() + labelPaint.ascent()) / 2f
+        for (i in 1..divisions) {
+            val frac = i / divisions.toFloat()
             val y = bottom - frac * (bottom - top)
-            canvas.drawLine(0f, y, w, y, gridPaint)
-            val label = (curMax * frac).roundToInt().toString() + if (i == 3) " ms" else ""
-            canvas.drawText(label, dp(4f), y - dp(3f), labelPaint)
+            canvas.drawLine(0f, y, xRight, y, gridPaint)
+            canvas.drawText((curMax * frac).roundToInt().toString(), xRight + dp(6f), y - labelOffset, labelPaint)
         }
-        canvas.drawLine(0f, bottom, w, bottom, gridPaint)
+        canvas.drawLine(0f, bottom, xRight, bottom, gridPaint)
+        canvas.drawLine(xRight / 3f, top, xRight / 3f, bottom, gridPaint)
+        canvas.drawLine(xRight * 2f / 3f, top, xRight * 2f / 3f, bottom, gridPaint)
 
         if (series.all { it.samples.isEmpty() }) {
-            canvas.drawText(placeholder, w / 2f, (top + bottom) / 2f, emptyPaint)
+            // Centro de verdade: pelo retângulo real do texto, para ele ficar entre duas linhas da grade.
+            textBounds.setEmpty()
+            emptyPaint.getTextBounds(placeholder, 0, placeholder.length, textBounds)
+            canvas.drawText(placeholder, xRight / 2f, (top + bottom) / 2f - textBounds.exactCenterY(), emptyPaint)
             if (animating || live) scheduleFrame()
             return
         }
@@ -254,20 +242,11 @@ class LatencyChartView(context: Context) : View(context) {
         for ((index, s) in series.withIndex()) {
             val list = s.samples
 
-            // Deslize da amostra mais recente até o valor real.
-            val easing = s.easing
-            if (easing != null) {
-                val p = ((now - s.easeStart) / EASE_MS).coerceIn(0f, 1f)
-                val smooth = p * p * (3f - 2f * p)
-                easing.dv = s.easeFrom + (easing.v - s.easeFrom) * smooth
-                if (p >= 1f) s.easing = null else animating = true
-            }
-
             // Estende a curva até "agora" com um ponto virtual: a linha continua andando entre respostas.
             var virtual: Sample? = null
             val tail = list.lastOrNull()
             if (live && tail != null && !tail.lost && displayT > tail.t && displayT - tail.t <= HEAD_GRACE_MS) {
-                virtual = Sample(displayT, tail.dv)
+                virtual = Sample(displayT, tail.v)
                 list.add(virtual)
             }
 
@@ -329,41 +308,37 @@ class LatencyChartView(context: Context) : View(context) {
         if (t1 < winStart || t0 > displayT) return Float.NaN
 
         if (from == to) {
-            dotPaint.color = if (single) colorFor(list[from].dv.toDouble()) else s.color
-            canvas.drawCircle(xOf(t0), yOf(list[from].dv), dp(3f), dotPaint)
-            return headOf(list[from].dv, t0, xOf)
+            dotPaint.color = if (single) colorFor(list[from].v.toDouble()) else s.color
+            canvas.drawCircle(xOf(t0), yOf(list[from].v), dp(3f), dotPaint)
+            return headOf(list[from].v, t0, xOf)
         }
 
-        computeTangents(s, from, to)
-
-        val startT = max(t0, winStart)
-        val endT = min(t1, displayT)
-        val stepMs = max(1L, (WINDOW_MS * dp(3f) / xRight).toLong())
-
+        // Degraus: cada valor fica reto até a próxima amostra, e então salta na vertical.
         path.reset()
         fillPath.reset()
-
-        var k = from
-        var t = startT
-        var first = true
+        var started = false
         var x = 0f
-        var v = 0f
-        while (true) {
-            while (k < to - 1 && list[k + 1].t <= t) k++
-            v = hermite(s, k, t)
-            x = xOf(t)
-            val y = yOf(v)
-            if (first) {
+        var y = 0f
+        for (k in from..to) {
+            val sample = list[k]
+            if (sample.t < winStart && k < to && list[k + 1].t <= winStart) continue
+            val nextX = xOf(max(sample.t, winStart))
+            if (!started) {
+                x = nextX
+                y = yOf(sample.v)
                 path.moveTo(x, y)
                 fillPath.moveTo(x, bottom)
                 fillPath.lineTo(x, y)
-                first = false
+                started = true
             } else {
-                path.lineTo(x, y)
-                fillPath.lineTo(x, y)
+                // Horizontal até o instante da amostra nova, depois o salto.
+                path.lineTo(nextX, y)
+                fillPath.lineTo(nextX, y)
+                y = yOf(sample.v)
+                path.lineTo(nextX, y)
+                fillPath.lineTo(nextX, y)
+                x = nextX
             }
-            if (t >= endT) break
-            t = min(t + stepMs, endT)
         }
         fillPath.lineTo(x, bottom)
         fillPath.close()
@@ -372,13 +347,15 @@ class LatencyChartView(context: Context) : View(context) {
 
         linePaint.color = s.color
         linePaint.strokeWidth = if (single) dp(1.8f) else dp(1.6f)
+        linePaint.strokeJoin = Paint.Join.MITER
+        linePaint.strokeCap = Paint.Cap.BUTT
         canvas.drawPath(path, linePaint)
 
         return if (t0 <= displayT && t1 >= displayT) {
             runHeadX = xRight
-            v
+            list[to].v
         } else {
-            headOf(list[to].dv, t1, xOf)
+            headOf(list[to].v, t1, xOf)
         }
     }
 
@@ -392,56 +369,13 @@ class LatencyChartView(context: Context) : View(context) {
         return value
     }
 
-    /** Tangentes de Fritsch–Carlson: garantem curva monotônica entre pontos (sem overshoot). */
-    private fun computeTangents(s: Series, from: Int, to: Int) {
-        val list = s.samples
-        if (s.tangents.size < list.size) s.tangents = FloatArray(list.size + 64)
-        val m = s.tangents
-        val d = FloatArray(to - from)
-        for (i in from until to) {
-            val h = max(1f, (list[i + 1].t - list[i].t).toFloat())
-            d[i - from] = (list[i + 1].dv - list[i].dv) / h
-        }
-        m[from] = d[0]
-        m[to] = d[to - from - 1]
-        for (i in from + 1 until to) {
-            val a = d[i - 1 - from]
-            val b = d[i - from]
-            m[i] = if (a * b <= 0f) 0f else (a + b) / 2f
-        }
-        for (i in from until to) {
-            val di = d[i - from]
-            if (di == 0f) {
-                m[i] = 0f
-                m[i + 1] = 0f
-            } else {
-                val a = m[i] / di
-                val b = m[i + 1] / di
-                val sq = a * a + b * b
-                if (sq > 9f) {
-                    val tau = 3f / sqrt(sq)
-                    m[i] = tau * a * di
-                    m[i + 1] = tau * b * di
-                }
-            }
-        }
-    }
-
-    private fun hermite(s: Series, k: Int, t: Long): Float {
-        val a = s.samples[k]
-        val b = s.samples[k + 1]
-        val h = max(1f, (b.t - a.t).toFloat())
-        val u = ((t - a.t) / h).coerceIn(0f, 1f)
-        val u2 = u * u
-        val u3 = u2 * u
-        return (2 * u3 - 3 * u2 + 1) * a.dv +
-            (u3 - 2 * u2 + u) * h * s.tangents[k] +
-            (-2 * u3 + 3 * u2) * b.dv +
-            (u3 - u2) * h * s.tangents[k + 1]
-    }
-
     private fun niceCeil(v: Float): Float {
         for (step in SCALE_STEPS) if (v <= step) return step
         return (v / 1000f).toInt() * 1000f + 1000f
+    }
+
+    private fun divisionsFor(scale: Float): Int {
+        val i = SCALE_STEPS.indexOfFirst { it == scale }
+        return if (i >= 0) SCALE_DIVISIONS[i] else 4
     }
 }
