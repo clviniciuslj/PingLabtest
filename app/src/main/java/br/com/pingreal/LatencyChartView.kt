@@ -39,7 +39,7 @@ class LatencyChartView(context: Context) : View(context) {
         const val IDLE_TEXT = "Inicie um ping para ver a latência"
 
         private const val HEAD_GRACE_MS = 2500L
-        private const val WINDOW_MS = 60_000L
+        private const val WINDOW_MS = 35_000L
 
         // A linha anda poucos pixels por segundo: 30 quadros/s ficam iguais a 60/120 e gastam menos bateria.
         private const val FRAME_MS = 33L
@@ -150,7 +150,7 @@ class LatencyChartView(context: Context) : View(context) {
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         fillPaint.shader = LinearGradient(
             0f, dp(10f), 0f, h - dp(12f),
-            Color.argb(40, Color.red(Palette.green), Color.green(Palette.green), Color.blue(Palette.green)), Color.argb(0, Color.red(Palette.green), Color.green(Palette.green), Color.blue(Palette.green)),
+            Color.argb(80, Color.red(Palette.accent), Color.green(Palette.accent), Color.blue(Palette.accent)), Color.argb(0, Color.red(Palette.accent), Color.green(Palette.accent), Color.blue(Palette.accent)),
             Shader.TileMode.CLAMP
         )
     }
@@ -279,13 +279,6 @@ class LatencyChartView(context: Context) : View(context) {
             if (virtual != null) list.removeAt(list.size - 1)
         }
 
-        // Ponto na ponta (valor atual de cada série)
-        for ((index, headValue) in heads.withIndex()) {
-            if (headValue.isNaN()) continue
-            dotPaint.color = if (single) colorFor(headValue.toDouble()) else series[index].color
-            canvas.drawCircle(headXs[index], yOf(headValue), dp(3.2f), dotPaint)
-        }
-
         if (live || animating) scheduleFrame()
     }
 
@@ -346,7 +339,7 @@ class LatencyChartView(context: Context) : View(context) {
         if (single) canvas.drawPath(fillPath, fillPaint)
 
         linePaint.color = s.color
-        linePaint.strokeWidth = if (single) dp(1.8f) else dp(1.6f)
+        linePaint.strokeWidth = if (single) dp(1.5f) else dp(1.5f)
         linePaint.strokeJoin = Paint.Join.MITER
         linePaint.strokeCap = Paint.Cap.BUTT
         canvas.drawPath(path, linePaint)

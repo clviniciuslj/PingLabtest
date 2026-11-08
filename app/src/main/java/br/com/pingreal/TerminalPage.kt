@@ -301,7 +301,7 @@ class TerminalPage(
         // ---- gráfico (compacto, no meio) ----
         val chartCard = ui.card().apply { setPadding(ui.dp(16), ui.dp(12), ui.dp(16), ui.dp(12)) }
         val chartHeader = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
-        chartSubtitle = ui.tv("últimos 60 s", 12f, ui.muted)
+        chartSubtitle = ui.tv("últimos 35 s", 12f, ui.muted)
         val chartTitle = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             addView(ui.tv("Latência", 15f, ui.white, bold = true))
@@ -433,7 +433,7 @@ class TerminalPage(
         singleStats.visibility = if (multi) View.GONE else View.VISIBLE
         multiBox.visibility = if (multi) View.VISIBLE else View.GONE
         latencyNow.visibility = if (multi) View.GONE else View.VISIBLE
-        chartSubtitle.text = if (multi) "${sessions.size} alvos, últimos 60 s" else "últimos 60 s"
+        chartSubtitle.text = if (multi) "${sessions.size} alvos, últimos 35 s" else "últimos 35 s"
 
         multiBox.removeAllViews()
         multiRows.clear()
