@@ -25,7 +25,6 @@ object Prefs {
     const val WIDGET_HOST = "widget_host"
     const val FAVORITES = "favorites"
     const val HISTORY = "history"
-    const val NET_NAMES = "net_names"
 
     fun of(context: Context): SharedPreferences = context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
 }

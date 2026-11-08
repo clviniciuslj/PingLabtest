@@ -69,11 +69,10 @@ class DiagnosticPage(
 
     private fun buildDiagnosticCard(): View {
         val card = ui.card().apply { setPadding(ui.dp(16), ui.dp(16), ui.dp(16), ui.dp(6)) }
-        card.addView(ui.title("Diagnóstico da rede"))
+        card.addView(ui.title("Diagnóstico da rede").apply { gravity = android.view.Gravity.CENTER }, ui.lp(-1, -2).apply { bottomMargin = ui.dp(16) })
         diagButton = ui.button("Iniciar diagnóstico", ui.accent, ui.onAccent) {
             if (diagRunning) engine?.cancel() else startDiagnostic()
         }
-        card.addView(diagButton, ui.lp(-1, ui.dp(52)).apply { topMargin = ui.dp(12); bottomMargin = ui.dp(18) })
 
         val steps = DiagnosticEngine.STEP_TITLES
         for ((index, step) in steps.withIndex()) {
@@ -112,12 +111,14 @@ class DiagnosticPage(
             card.addView(row, ui.lp(-1, -2))
             rows[id] = Row(badge, detail, tip)
         }
+        // O botão fica embaixo, depois das etapas.
+        card.addView(diagButton, ui.lp(-1, ui.dp(52)).apply { topMargin = ui.dp(4); bottomMargin = ui.dp(10) })
         return card
     }
 
     private fun buildSpeedCard(): View {
         val card = ui.card().apply { setPadding(ui.dp(16), ui.dp(16), ui.dp(16), ui.dp(16)) }
-        card.addView(ui.title("Velocidade"))
+        card.addView(ui.title("Teste de velocidade").apply { gravity = android.view.Gravity.CENTER }, ui.lp(-1, -2))
 
         gauge = GaugeView(activity)
         card.addView(gauge, ui.lp(-1, -2).apply { topMargin = ui.dp(10) })

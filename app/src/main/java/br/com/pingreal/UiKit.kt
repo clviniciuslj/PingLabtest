@@ -25,7 +25,6 @@ import kotlin.math.exp
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
-import kotlin.math.sqrt
 
 /** Tipografia: Barlow na interface, Barlow Semi Condensed nos números, IBM Plex Mono no console. */
 object Fonts {
@@ -254,7 +253,7 @@ class UiKit(private val context: Context) {
 }
 
 /** Ícones desenhados em código (traço de 1,8 dp, cantos redondos), num quadrado centralizado de [sizeDp]. */
-class IconView(context: Context, private val kind: Int, private val sizeDp: Float = 24f) : View(context) {
+class IconView(context: Context, kind: Int, private val sizeDp: Float = 24f) : View(context) {
 
     companion object {
         const val TERMINAL = 0
@@ -265,8 +264,11 @@ class IconView(context: Context, private val kind: Int, private val sizeDp: Floa
         const val CHEVRON = 5
         const val EXPAND_ALL = 6
         const val COLLAPSE_ALL = 7
-        const val NETWORK = 8
+        const val PLUS = 9
     }
+
+    var kind: Int = kind
+        set(value) { field = value; invalidate() }
 
     var color: Int = Palette.muted
         set(value) { field = value; invalidate() }
@@ -361,22 +363,9 @@ class IconView(context: Context, private val kind: Int, private val sizeDp: Floa
                 path.lineTo(x(0.72f), y(0.40f))
                 canvas.drawPath(path, paint)
             }
-            NETWORK -> {
-                // Um nó central ligado a três aparelhos.
-                val hub = floatArrayOf(0.50f, 0.46f)
-                val ends = arrayOf(floatArrayOf(0.18f, 0.20f), floatArrayOf(0.82f, 0.20f), floatArrayOf(0.50f, 0.88f))
-                val r = s * 0.10f
-                for (e in ends) {
-                    val dx = e[0] - hub[0]
-                    val dy = e[1] - hub[1]
-                    val len = sqrt(dx * dx + dy * dy)
-                    canvas.drawLine(
-                        x(hub[0] + dx / len * 0.12f), y(hub[1] + dy / len * 0.12f),
-                        x(e[0] - dx / len * 0.12f), y(e[1] - dy / len * 0.12f), paint
-                    )
-                    canvas.drawCircle(x(e[0]), y(e[1]), r, paint)
-                }
-                canvas.drawCircle(x(hub[0]), y(hub[1]), s * 0.12f, paint)
+            PLUS -> {
+                canvas.drawLine(x(0.22f), y(0.5f), x(0.78f), y(0.5f), paint)
+                canvas.drawLine(x(0.5f), y(0.22f), x(0.5f), y(0.78f), paint)
             }
             EXPAND_ALL, COLLAPSE_ALL -> {
                 // Duas setas: para fora (expandir tudo) ou para dentro (recolher tudo).
