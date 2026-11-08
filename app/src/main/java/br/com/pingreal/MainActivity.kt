@@ -12,6 +12,8 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
+import android.provider.Settings
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
@@ -37,6 +39,7 @@ import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
 
 /** Moldura do app: cabeçalho, abas, barra inferior, rede, compartilhamento e "um teste por vez". */
@@ -316,6 +319,117 @@ class MainActivity : Activity(), PageHost {
         ""
     }
 
+    @Suppress("DEPRECATION")
+    private fun versionCodeNow(): Long = try {
+        val info = packageManager.getPackageInfo(packageName, 0)
+        if (Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()
+    } catch (_: Exception) {
+        0L
+    }
+
+    // =====================================================================
+    // Atualização (só quando o usuário pede, pelo menu ⋮)
+    // =====================================================================
+
+    private fun checkForUpdates() {
+        Toast.makeText(this, "Buscando atualizações…", Toast.LENGTH_SHORT).show()
+        val code = versionCodeNow()
+        val name = versionName()
+        Thread({
+            val result = Updater.check(code, name)
+            post { showUpdateResult(result) }
+        }, "update-check").start()
+    }
+
+    private fun simpleDialog(title: String, message: String) {
+        AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK", null).show()
+    }
+
+    private fun showUpdateResult(result: UpdateResult) {
+        when (result) {
+            is UpdateResult.UpToDate -> simpleDialog("Tudo em dia", "Você já está na versão mais recente (${result.current}).")
+            UpdateResult.NoReleases -> simpleDialog("Sem atualizações", "Ainda não há versões publicadas no GitHub.")
+            is UpdateResult.Failed -> simpleDialog("Não foi possível verificar", "Tente de novo com a internet ligada (${result.reason}).")
+            is UpdateResult.Newer -> {
+                val r = result.release
+                val sb = StringBuilder("Você está na versão ${versionName()}.")
+                if (r.sizeBytes > 0) sb.append("\nTamanho: ").append(String.format(Locale.US, "%.1f MB", r.sizeBytes / 1_048_576.0))
+                if (r.notes.isNotEmpty()) sb.append("\n\n").append(r.notes.take(600))
+                AlertDialog.Builder(this)
+                    .setTitle("Nova versão: ${r.name}")
+                    .setMessage(sb.toString())
+                    .setPositiveButton("Baixar e instalar") { _, _ -> downloadAndInstall(r) }
+                    .setNegativeButton("Agora não", null)
+                    .show()
+            }
+        }
+    }
+
+    private fun downloadAndInstall(release: ReleaseInfo) {
+        val cancelled = AtomicBoolean(false)
+        val progress = ui.tv("Baixando… 0%", 15f, ui.text).apply { setPadding(ui.dp(24), ui.dp(12), ui.dp(24), ui.dp(4)) }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Baixando ${release.name}")
+            .setView(progress)
+            .setCancelable(false)
+            .setNegativeButton("Cancelar") { _, _ -> cancelled.set(true) }
+            .create()
+        dialog.show()
+
+        val dir = File(cacheDir, "updates")
+        dir.listFiles()?.forEach { it.delete() }
+        val target = File(dir, "PingLab-${release.code}.apk")
+        Thread({
+            var lastPercent = -1
+            try {
+                val done = Updater.download(release.apkUrl, target, release.sizeBytes, { d, t ->
+                    val percent = if (t > 0) (d * 100 / t).toInt() else -1
+                    if (percent != lastPercent) {
+                        lastPercent = percent
+                        post { progress.text = if (percent >= 0) "Baixando… $percent%" else "Baixando…" }
+                    }
+                }, { cancelled.get() })
+                post {
+                    dialog.dismiss()
+                    if (done) installApk(target)
+                }
+            } catch (e: Exception) {
+                post {
+                    dialog.dismiss()
+                    simpleDialog("Falha no download", "${e.message ?: "erro de rede"}. Tente de novo.")
+                }
+            }
+        }, "update-download").start()
+    }
+
+    private fun installApk(file: File) {
+        if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
+            AlertDialog.Builder(this)
+                .setTitle("Permita a instalação")
+                .setMessage("Para atualizar, o Android precisa que você permita ao PingLab instalar apps. Ative a opção na tela que vai abrir e depois toque em Buscar atualizações de novo.")
+                .setPositiveButton("Abrir ajustes") { _, _ ->
+                    try {
+                        startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+                    } catch (_: Exception) {
+                        Toast.makeText(this, "Abra os ajustes do Android e permita instalar apps para o PingLab.", Toast.LENGTH_LONG).show()
+                    }
+                }
+                .setNegativeButton("Cancelar", null)
+                .show()
+            return
+        }
+        try {
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            simpleDialog("Não foi possível instalar", e.message ?: "erro desconhecido")
+        }
+    }
+
     private fun buildUi() {
         root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -481,6 +595,7 @@ class MainActivity : Activity(), PageHost {
                 }
             }
             .setPositiveButton("OK") { _, _ -> if (themeChanged) recreate() }
+            .setNeutralButton("Buscar atualizações") { _, _ -> checkForUpdates() }
             .setOnCancelListener { if (themeChanged) recreate() }
             .show()
     }
