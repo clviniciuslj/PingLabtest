@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -15,6 +15,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Read version
+        id: ver
+        run: |
+          CODE=$(grep -oP 'versionCode = \K[0-9]+' app/build.gradle.kts)
+          NAME=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "## PingLab Teste $NAME (versão $CODE)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -44,6 +53,20 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: PingLab-Teste-APK
+          name: PingLab-Teste-APK-${{ steps.ver.outputs.name }}
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
+      - name: Publish release
+        if: success() && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          CODE='${{ steps.ver.outputs.code }}'
+          NAME='${{ steps.ver.outputs.name }}'
+          cp app/build/outputs/apk/debug/app-debug.apk "PingLab-Teste-$NAME.apk"
+          gh release delete "build-$CODE" --yes --cleanup-tag || true
+          gh release create "build-$CODE" "PingLab-Teste-$NAME.apk" \
+            --title "$NAME" \
+            --notes "PingLab Teste $NAME" \
+            --latest
