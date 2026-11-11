@@ -36,7 +36,13 @@ sealed class GeminiResult {
 
     class Blocked(val reason: String) : GeminiResult()
 
-    class Failure(val kind: GeminiError, val message: String, val retryAfterSeconds: Int? = null) : GeminiResult()
+    class Failure(
+        val kind: GeminiError,
+        val message: String,
+        val retryAfterSeconds: Int? = null,
+        val quotaId: String? = null,
+        val quotaValue: String? = null
+    ) : GeminiResult()
 }
 
 class ModelInfo(val id: String, val displayName: String)
@@ -203,7 +209,20 @@ class GeminiClient(private val transport: GeminiTransport = UrlConnectionTranspo
             status >= 500 -> GeminiError.SERVER
             else -> GeminiError.UNKNOWN
         }
-        return GeminiResult.Failure(kind, message.ifBlank { "HTTP $status" }, retrySeconds(error, message))
+        val (quotaId, quotaValue) = quotaOf(error)
+        return GeminiResult.Failure(kind, message.ifBlank { "HTTP $status" }, retrySeconds(error, message), quotaId, quotaValue)
+    }
+
+    /** Qual cota estourou (por dia, por minuto, por tokens...), do campo QuotaFailure do erro. */
+    private fun quotaOf(error: JSONObject?): Pair<String?, String?> {
+        val details = error?.optJSONArray("details") ?: return null to null
+        for (i in 0 until details.length()) {
+            val violations = details.optJSONObject(i)?.optJSONArray("violations") ?: continue
+            val first = violations.optJSONObject(0) ?: continue
+            val id = first.optString("quotaId").ifBlank { first.optString("quotaMetric") }.ifBlank { null }
+            return id to first.optString("quotaValue").ifBlank { null }
+        }
+        return null to null
     }
 
     /** Quanto o Google pede para esperar: no campo RetryInfo ou na frase "retry in 34s". */
@@ -263,12 +282,33 @@ class GeminiClient(private val transport: GeminiTransport = UrlConnectionTranspo
             GeminiError.INVALID_KEY -> "A chave do Gemini não foi aceita. Confira se colou a chave inteira ou crie outra."
             GeminiError.FORBIDDEN -> "O Google negou o acesso (${f.message}). A chave pode não ter permissão para este modelo ou região."
             GeminiError.MODEL_UNAVAILABLE -> "O modelo $model não está disponível para a sua chave (${f.message}). Escolha outro manualmente."
-            GeminiError.RATE_LIMIT -> "Limite gratuito do Gemini atingido. Aguarde um pouco e tente de novo."
+            GeminiError.RATE_LIMIT -> rateLimitText(f, model)
             GeminiError.BAD_REQUEST -> "O Gemini recusou o pedido: ${f.message}"
             GeminiError.SERVER -> "O Gemini está com problema no servidor (${f.message}). Tente de novo em instantes."
             GeminiError.TIMEOUT -> "O Gemini demorou demais para responder. Tente de novo."
             GeminiError.NETWORK -> "Sem conexão com o Gemini (${f.message}). Confira a internet."
             GeminiError.UNKNOWN -> "Não foi possível obter a resposta: ${f.message}"
+        }
+
+        /** 80000 s vira "22 h 13 min": prazos longos são quase sempre o limite diário. */
+        fun formatWait(seconds: Int): String = when {
+            seconds < 60 -> "$seconds s"
+            seconds < 3600 -> "${seconds / 60} min ${seconds % 60} s"
+            else -> "${seconds / 3600} h ${(seconds % 3600) / 60} min"
+        }
+
+        fun rateLimitText(f: GeminiResult.Failure, model: String): String {
+            val id = f.quotaId.orEmpty()
+            val limit = f.quotaValue?.let { " (limite: $it)" }.orEmpty()
+            val wait = f.retryAfterSeconds?.let { " O Google pede para esperar ${formatWait(it)}." }.orEmpty()
+            val head = when {
+                id.contains("PerDay", ignoreCase = true) ->
+                    "O limite DIÁRIO do plano gratuito para o modelo $model acabou$limit. Ele reinicia à meia-noite do horário do Pacífico (por volta das 4h ou 5h da manhã em Brasília).$wait Você pode escolher outro modelo à mão."
+                id.contains("PerMinute", ignoreCase = true) ->
+                    "Limite por minuto do plano gratuito atingido para o modelo $model$limit.$wait"
+                else -> "Limite gratuito do Gemini atingido para o modelo $model.$wait"
+            }
+            return head + "\n\nMensagem do Google: " + f.message.take(400)
         }
 
         fun describeBlock(reason: String) = "O Gemini não respondeu esta mensagem (motivo: $reason). Reformule a pergunta."

@@ -505,8 +505,15 @@ class ChatPage(
             GeminiError.MODEL_UNAVAILABLE ->
                 addError(text, listOf("Escolher modelo" to { chooseModel { requestReply() } }))
             GeminiError.RATE_LIMIT -> {
-                val box = addError(text, emptyList())
-                startCountdown(box, f.retryAfterSeconds ?: DEFAULT_WAIT_SECONDS)
+                val wait = f.retryAfterSeconds
+                if (wait == null || wait <= LONG_WAIT_SECONDS) {
+                    // Espera curta (limite por minuto): informa e libera o botão quando o tempo acabar.
+                    val box = addError(text, emptyList())
+                    startCountdown(box, wait ?: DEFAULT_WAIT_SECONDS)
+                } else {
+                    // Espera longa (limite diário): contagem não adianta; deixa escolher outro modelo à mão ou tentar depois.
+                    addError(text, listOf("Escolher outro modelo" to { chooseModel { requestReply() } }, retry))
+                }
             }
             else -> addError(text, listOf(retry))
         }
@@ -525,7 +532,7 @@ class ChatPage(
             override fun run() {
                 if (closed) return
                 if (left > 0) {
-                    label.text = "Aguarde $left s para tentar de novo."
+                    label.text = "Aguarde ${GeminiClient.formatWait(left)} para tentar de novo."
                     left--
                     handler.postDelayed(this, 1000)
                 } else {
@@ -701,5 +708,6 @@ class ChatPage(
 
     private companion object {
         const val DEFAULT_WAIT_SECONDS = 60
+        const val LONG_WAIT_SECONDS = 600
     }
 }
