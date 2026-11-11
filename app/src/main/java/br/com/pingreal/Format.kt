@@ -25,6 +25,10 @@ object Prefs {
     const val WIDGET_HOST = "widget_host"
     const val FAVORITES = "favorites"
     const val HISTORY = "history"
+    const val NET_NAMES = "net_names"
+    const val AI_KEY_ENC = "gemini_key_enc"
+    const val AI_MODEL = "gemini_model"
+    const val AI_INCLUDE_PUBLIC_IP = "ai_include_public_ip"
 
     fun of(context: Context): SharedPreferences = context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
 }

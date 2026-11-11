@@ -12,6 +12,8 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
+import android.provider.Settings
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
@@ -37,6 +39,7 @@ import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
 
 /** Moldura do app: cabeçalho, abas, barra inferior, rede, compartilhamento e "um teste por vez". */
@@ -51,6 +54,10 @@ class MainActivity : Activity(), PageHost {
     private lateinit var terminal: TerminalPage
     private lateinit var diagnostic: DiagnosticPage
     private lateinit var condo: CondoPage
+    private lateinit var network: NetworkPage
+    private lateinit var chat: ChatPage
+    private lateinit var headerView: View
+    private var chatOpen = false
     private lateinit var root: LinearLayout
     private lateinit var nav: LinearLayout
     private lateinit var statusText: TextView
@@ -61,7 +68,6 @@ class MainActivity : Activity(), PageHost {
     private val tabLabels = ArrayList<TextView>()
 
     private var busy = false
-    private var currentTab = 0
     private var importCallback: ((String) -> Unit)? = null
     private var backgroundedAt = 0L
     private var cachedNet = NetInfo.EMPTY
@@ -139,6 +145,8 @@ class MainActivity : Activity(), PageHost {
         if (::terminal.isInitialized) terminal.shutdown()
         if (::diagnostic.isInitialized) diagnostic.shutdown()
         if (::condo.isInitialized) condo.shutdown()
+        if (::network.isInitialized) network.shutdown()
+        if (::chat.isInitialized) chat.shutdown()
         super.onDestroy()
     }
 
@@ -221,6 +229,42 @@ class MainActivity : Activity(), PageHost {
         }
     }
 
+    override fun openChat(snapshot: DiagnosticSnapshot) {
+        chatOpen = true
+        headerView.visibility = View.GONE
+        nav.visibility = View.GONE
+        chat.view.visibility = View.VISIBLE
+        terminal.hideKeyboard()
+        chat.open(snapshot)
+    }
+
+    private fun closeChat() {
+        chatOpen = false
+        chat.view.visibility = View.GONE
+        headerView.visibility = View.VISIBLE
+        nav.visibility = View.VISIBLE
+        val imm = getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+        imm.hideSoftInputFromWindow(chat.view.windowToken, 0)
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        if (chatOpen) closeChat() else super.onBackPressed()
+    }
+
+    override fun pingInTerminal(ip: String) {
+        selectTab(0)
+        terminal.pingNow(ip)
+    }
+
+    override fun openUrl(url: String) {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))
+        } catch (_: Exception) {
+            Toast.makeText(this, "Não há um navegador disponível.", Toast.LENGTH_LONG).show()
+        }
+    }
+
     override fun shareText(text: String) {
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
@@ -259,6 +303,7 @@ class MainActivity : Activity(), PageHost {
         if (::terminal.isInitialized) terminal.onModeChanged(idle)
         if (::diagnostic.isInitialized) diagnostic.onModeChanged(idle)
         if (::condo.isInitialized) condo.onModeChanged(idle)
+        if (::network.isInitialized) network.onModeChanged(idle)
     }
 
     private fun setStatus(label: String, color: Int) {
@@ -287,6 +332,7 @@ class MainActivity : Activity(), PageHost {
 
     private fun refreshNetwork() {
         if (::terminal.isInitialized) terminal.onNetworkChanged()
+        if (::network.isInitialized) network.onNetworkChanged()
     }
 
     // =====================================================================
@@ -298,6 +344,117 @@ class MainActivity : Activity(), PageHost {
         packageManager.getPackageInfo(packageName, 0).versionName ?: ""
     } catch (_: Exception) {
         ""
+    }
+
+    @Suppress("DEPRECATION")
+    private fun versionCodeNow(): Long = try {
+        val info = packageManager.getPackageInfo(packageName, 0)
+        if (Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()
+    } catch (_: Exception) {
+        0L
+    }
+
+    // =====================================================================
+    // Atualização (só quando o usuário pede, pelo menu ⋮)
+    // =====================================================================
+
+    private fun checkForUpdates() {
+        Toast.makeText(this, "Buscando atualizações…", Toast.LENGTH_SHORT).show()
+        val code = versionCodeNow()
+        val name = versionName()
+        Thread({
+            val result = Updater.check(code, name)
+            post { showUpdateResult(result) }
+        }, "update-check").start()
+    }
+
+    private fun simpleDialog(title: String, message: String) {
+        AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK", null).show()
+    }
+
+    private fun showUpdateResult(result: UpdateResult) {
+        when (result) {
+            is UpdateResult.UpToDate -> simpleDialog("Tudo em dia", "Você já está na versão mais recente (${result.current}).")
+            UpdateResult.NoReleases -> simpleDialog("Sem atualizações", "Ainda não há versões publicadas no GitHub.")
+            is UpdateResult.Failed -> simpleDialog("Não foi possível verificar", "Tente de novo com a internet ligada (${result.reason}).")
+            is UpdateResult.Newer -> {
+                val r = result.release
+                val sb = StringBuilder("Você está na versão ${versionName()}.")
+                if (r.sizeBytes > 0) sb.append("\nTamanho: ").append(String.format(Locale.US, "%.1f MB", r.sizeBytes / 1_048_576.0))
+                if (r.notes.isNotEmpty()) sb.append("\n\n").append(r.notes.take(600))
+                AlertDialog.Builder(this)
+                    .setTitle("Nova versão: ${r.name}")
+                    .setMessage(sb.toString())
+                    .setPositiveButton("Baixar e instalar") { _, _ -> downloadAndInstall(r) }
+                    .setNegativeButton("Agora não", null)
+                    .show()
+            }
+        }
+    }
+
+    private fun downloadAndInstall(release: ReleaseInfo) {
+        val cancelled = AtomicBoolean(false)
+        val progress = ui.tv("Baixando… 0%", 15f, ui.text).apply { setPadding(ui.dp(24), ui.dp(12), ui.dp(24), ui.dp(4)) }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Baixando ${release.name}")
+            .setView(progress)
+            .setCancelable(false)
+            .setNegativeButton("Cancelar") { _, _ -> cancelled.set(true) }
+            .create()
+        dialog.show()
+
+        val dir = File(cacheDir, "updates")
+        dir.listFiles()?.forEach { it.delete() }
+        val target = File(dir, "PingLab-${release.code}.apk")
+        Thread({
+            var lastPercent = -1
+            try {
+                val done = Updater.download(release.apkUrl, target, release.sizeBytes, { d, t ->
+                    val percent = if (t > 0) (d * 100 / t).toInt() else -1
+                    if (percent != lastPercent) {
+                        lastPercent = percent
+                        post { progress.text = if (percent >= 0) "Baixando… $percent%" else "Baixando…" }
+                    }
+                }, { cancelled.get() })
+                post {
+                    dialog.dismiss()
+                    if (done) installApk(target)
+                }
+            } catch (e: Exception) {
+                post {
+                    dialog.dismiss()
+                    simpleDialog("Falha no download", "${e.message ?: "erro de rede"}. Tente de novo.")
+                }
+            }
+        }, "update-download").start()
+    }
+
+    private fun installApk(file: File) {
+        if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
+            AlertDialog.Builder(this)
+                .setTitle("Permita a instalação")
+                .setMessage("Para atualizar, o Android precisa que você permita ao PingLab instalar apps. Ative a opção na tela que vai abrir e depois toque em Buscar atualizações de novo.")
+                .setPositiveButton("Abrir ajustes") { _, _ ->
+                    try {
+                        startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+                    } catch (_: Exception) {
+                        Toast.makeText(this, "Abra os ajustes do Android e permita instalar apps para o PingLab.", Toast.LENGTH_LONG).show()
+                    }
+                }
+                .setNegativeButton("Cancelar", null)
+                .show()
+            return
+        }
+        try {
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            simpleDialog("Não foi possível instalar", e.message ?: "erro desconhecido")
+        }
     }
 
     private fun buildUi() {
@@ -330,12 +487,12 @@ class MainActivity : Activity(), PageHost {
             }
             v.setPadding(ui.dp(16) + pad[0], ui.dp(8) + pad[1], ui.dp(16) + pad[2], ui.dp(8) + pad[3])
             // Com o teclado aberto, a barra de abas só atrapalha.
-            if (::nav.isInitialized) nav.visibility = if (imeHeight > ui.dp(120)) View.GONE else View.VISIBLE
+            if (::nav.isInitialized) nav.visibility = if (chatOpen || imeHeight > ui.dp(120)) View.GONE else View.VISIBLE
             insets
         }
 
         // ---- cabeçalho: marca centralizada com o status embaixo; opções à direita ----
-        val header = FrameLayout(this).apply { setPadding(0, ui.dp(2), 0, ui.dp(12)) }
+        val header = FrameLayout(this).apply { setPadding(0, ui.dp(2), 0, ui.dp(12)) }.also { headerView = it }
         val brand = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -377,28 +534,34 @@ class MainActivity : Activity(), PageHost {
         terminal = TerminalPage(this, ui, this)
         diagnostic = DiagnosticPage(this, ui, this)
         condo = CondoPage(this, ui, this)
+        network = NetworkPage(this, ui, this)
         val frame = FrameLayout(this)
-        for (page in listOf(terminal.view, diagnostic.view, condo.view)) {
+        for (page in listOf(terminal.view, diagnostic.view, condo.view, network.view)) {
             frame.addView(page, FrameLayout.LayoutParams(-1, -1))
             pages.add(page)
         }
+        // O chat abre por cima das abas, sem o cabeçalho nem a barra de abas.
+        chat = ChatPage(this, ui, this, SecureKeyStore(prefs(), KeystoreCipher()), GeminiClient(UrlConnectionTransport { MobileRoute.acquire(this) }), { diagnostic.currentSnapshot() }) { closeChat() }
+        chat.view.visibility = View.GONE
+        frame.addView(chat.view, FrameLayout.LayoutParams(-1, -1))
         root.addView(frame, ui.lp(-1, 0, 1f))
 
         // ---- barra de abas (pílula) ----
         nav = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            background = ui.roundRect(ui.panel, 24f, ui.panelStroke)
-            setPadding(ui.dp(4), ui.dp(4), ui.dp(4), ui.dp(4))
+            background = ui.roundRect(ui.panel, 28f, ui.panelStroke)
+            setPadding(ui.dp(6), ui.dp(6), ui.dp(6), ui.dp(6))
         }
         nav.addView(navItem(0, IconView.TERMINAL, "Terminal"), ui.lp(0, -2, 1f))
         nav.addView(navItem(1, IconView.DIAGNOSTIC, "Diagnóstico"), ui.lp(0, -2, 1f).apply { marginStart = ui.dp(4) })
         nav.addView(navItem(2, IconView.HOUSE, "Condomínio"), ui.lp(0, -2, 1f).apply { marginStart = ui.dp(4) })
+        nav.addView(navItem(3, IconView.NETWORK, "Rede"), ui.lp(0, -2, 1f).apply { marginStart = ui.dp(4) })
         root.addView(nav, ui.lp(-1, -2).apply { topMargin = ui.dp(10) })
     }
 
     private fun navItem(index: Int, kind: Int, label: String): LinearLayout {
         val icon = IconView(this, kind)
-        val text = ui.medium(label, 11f, ui.muted).apply { gravity = Gravity.CENTER }
+        val text = ui.medium(label, 12f, ui.muted).apply { gravity = Gravity.CENTER }
         tabIcons.add(icon)
         tabLabels.add(text)
         val item = LinearLayout(this)
@@ -406,26 +569,26 @@ class MainActivity : Activity(), PageHost {
         return item.apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setPadding(0, ui.dp(5), 0, ui.dp(4))
+            setPadding(0, ui.dp(8), 0, ui.dp(7))
             isClickable = true
-            addView(icon, ui.lp(ui.dp(20), ui.dp(20)))
-            addView(text, ui.lp(-2, -2).apply { topMargin = ui.dp(2) })
+            addView(icon, ui.lp(ui.dp(24), ui.dp(24)))
+            addView(text, ui.lp(-2, -2).apply { topMargin = ui.dp(3) })
             setOnClickListener { selectTab(index) }
         }
     }
 
     private fun selectTab(index: Int) {
-        currentTab = index
         for ((i, page) in pages.withIndex()) page.visibility = if (i == index) View.VISIBLE else View.GONE
         for (i in tabIcons.indices) {
             val active = i == index
             val color = if (active) ui.accentInk else ui.muted
-            tabItems[i].background = ui.rippled(if (active) ui.softFill(ui.accent) else Color.TRANSPARENT, 20f)
+            tabItems[i].background = ui.rippled(if (active) ui.softFill(ui.accent) else Color.TRANSPARENT, 22f)
             tabIcons[i].color = color
             tabLabels[i].setTextColor(color)
             tabLabels[i].typeface = if (active) Fonts.semibold else Fonts.medium
         }
         if (index != 0) terminal.hideKeyboard()
+        if (index != 3) network.hideKeyboard()
     }
 
     private fun showSettings() {
@@ -443,7 +606,7 @@ class MainActivity : Activity(), PageHost {
             addView(ui.tv("Opções", 20f, ui.white, bold = true))
             addView(ui.tv("Versão ${versionName()}", 13f, ui.muted).apply { setPadding(0, ui.dp(2), 0, 0) })
         }
-        val builder = AlertDialog.Builder(this)
+        AlertDialog.Builder(this)
             .setCustomTitle(title)
             .setMultiChoiceItems(items, checked) { _, which, isChecked ->
                 val key = when (which) {
@@ -463,10 +626,9 @@ class MainActivity : Activity(), PageHost {
                 }
             }
             .setPositiveButton("OK") { _, _ -> if (themeChanged) recreate() }
+            .setNeutralButton("Buscar atualizações") { _, _ -> checkForUpdates() }
             .setOnCancelListener { if (themeChanged) recreate() }
-        // Importar ONUs só faz sentido na aba Condomínio.
-        if (currentTab == 2) builder.setNeutralButton("Importar ONUs") { _, _ -> condo.startImport() }
-        builder.show()
+            .show()
     }
 
     // =====================================================================

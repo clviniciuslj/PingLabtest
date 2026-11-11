@@ -144,6 +144,7 @@ class CondoPage(
 
     private var busyHeld = false
     private var idleGlobal = true
+    private var searchText = ""
     private var onlyErrors = false
     private var needsRebuild = false
     private var lastRebuild = 0L
@@ -166,7 +167,7 @@ class CondoPage(
     private lateinit var summaryBar: SegmentBar
     private lateinit var consoleChevron: IconView
     private lateinit var pingAllButton: Button
-    private lateinit var expandToggle: IconView
+    private lateinit var searchInput: EditText
     private lateinit var errorsToggle: TextView
     private lateinit var listBox: LinearLayout
     private lateinit var consoleBody: LinearLayout
@@ -174,6 +175,8 @@ class CondoPage(
     private lateinit var consoleFilterAction: TextView
     private lateinit var consoleScroll: ScrollView
     private lateinit var consoleOutput: TextView
+
+    private val searchDebounce = Runnable { filterChanged() }
 
     private val flushTick = object : Runnable {
         override fun run() {
@@ -209,11 +212,6 @@ class CondoPage(
 
     fun applyKeepScreen() {
         if (monitoring.isRunning) host.setKeepScreenOn(host.prefs().getBoolean(Prefs.KEEP_SCREEN, true))
-    }
-
-    /** Abre o seletor de arquivo (item "Importar ONUs" do menu ⋮). */
-    fun startImport() {
-        host.pickTextFile { text -> importText(text) }
     }
 
     fun importText(text: String) {
@@ -276,30 +274,53 @@ class CondoPage(
         summary.addView(totals, ui.lp(-1, -2).apply { topMargin = ui.dp(14) })
         view.addView(summary, ui.lp(-1, -2))
 
-        // ---- ações: pingar tudo, só erros, abrir/fechar as quadras e cadastrar ----
-        val actions = LinearLayout(activity).apply {
+        // ---- ações ----
+        val actions = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
+        pingAllButton = ui.button("Pingar tudo", ui.accent, ui.onAccent) { toggleMonitoring() }
+        val addButton = ui.button("Cadastrar", ui.softFill(ui.accent), ui.accentInk) { showOnuDialog(null) }
+        val importButton = ui.button("Importar", ui.softFill(ui.accent), ui.accentInk) {
+            host.pickTextFile { text -> importText(text) }
+        }
+        actions.addView(pingAllButton, ui.lp(0, ui.dp(52), 1.3f))
+        actions.addView(addButton, ui.lp(0, ui.dp(52), 1f).apply { marginStart = ui.dp(8) })
+        actions.addView(importButton, ui.lp(0, ui.dp(52), 1f).apply { marginStart = ui.dp(8) })
+        view.addView(actions, ui.lp(-1, -2).apply { topMargin = ui.dp(12) })
+
+        // ---- busca e filtros ----
+        val filters = LinearLayout(activity).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        pingAllButton = ui.button("Pingar tudo", ui.accent, ui.onAccent) { toggleMonitoring() }
+        searchInput = EditText(activity).apply {
+            setSingleLine(true)
+            textSize = 14f
+            typeface = Fonts.regular
+            setTextColor(ui.white)
+            setHintTextColor(ui.muted)
+            hint = "Buscar IP ou nome"
+            background = ui.field()
+            setPadding(ui.dp(14), 0, ui.dp(8), 0)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+                override fun afterTextChanged(s: Editable?) {
+                    searchText = s?.toString().orEmpty().trim()
+                    handler.removeCallbacks(searchDebounce)
+                    handler.postDelayed(searchDebounce, 250)
+                }
+            })
+        }
+        filters.addView(searchInput, ui.lp(0, ui.dp(46), 1f))
         errorsToggle = filterAction("Erros") {
             onlyErrors = !onlyErrors
             styleErrorsToggle()
             filterChanged()
         }
-        expandToggle = iconAction(IconView.EXPAND_ALL, "Abrir todas as quadras") { setAllExpanded(!anyExpanded()) }
-        val addButton = IconView(activity, IconView.PLUS, 20f).apply {
-            color = ui.accentInk
-            background = ui.rippled(ui.softFill(ui.accent), 16f)
-            isClickable = true
-            contentDescription = "Cadastrar ONU"
-            setOnClickListener { showOnuDialog(null) }
-        }
-        actions.addView(pingAllButton, ui.lp(0, ui.dp(44), 1f))
-        actions.addView(errorsToggle, ui.lp(-2, ui.dp(44)).apply { marginStart = ui.dp(8) })
-        actions.addView(expandToggle, ui.lp(ui.dp(44), ui.dp(44)).apply { marginStart = ui.dp(8) })
-        actions.addView(addButton, ui.lp(ui.dp(44), ui.dp(44)).apply { marginStart = ui.dp(8) })
-        view.addView(actions, ui.lp(-1, -2).apply { topMargin = ui.dp(12) })
+        filters.addView(errorsToggle, ui.lp(-2, ui.dp(46)).apply { marginStart = ui.dp(8) })
+        filters.addView(iconAction(IconView.EXPAND_ALL, "Abrir todas as quadras") { setAllExpanded(true) }, ui.lp(ui.dp(46), ui.dp(46)).apply { marginStart = ui.dp(8) })
+        filters.addView(iconAction(IconView.COLLAPSE_ALL, "Fechar todas as quadras") { setAllExpanded(false) }, ui.lp(ui.dp(46), ui.dp(46)).apply { marginStart = ui.dp(8) })
+        view.addView(filters, ui.lp(-1, -2).apply { topMargin = ui.dp(12) })
         styleErrorsToggle()
 
         // ---- lista agrupada por quadra ----
@@ -376,27 +397,7 @@ class CondoPage(
             if (onlyErrors) ui.rippled(ui.softFill(ui.red), 14f) else ui.rippled(ui.panel, 14f, ui.panelStroke)
     }
 
-    private fun anyExpanded(): Boolean = groups.values.any { it.expanded }
-
-    /** Um botão só para abrir/fechar as quadras: o ícone vira do outro lado (giro rápido) conforme o estado. */
-    private fun updateExpandIcon() {
-        if (!::expandToggle.isInitialized) return
-        val want = if (anyExpanded()) IconView.COLLAPSE_ALL else IconView.EXPAND_ALL
-        expandToggle.contentDescription =
-            if (want == IconView.COLLAPSE_ALL) "Fechar todas as quadras" else "Abrir todas as quadras"
-        if (expandToggle.kind == want) return
-        if (!expandToggle.isAttachedToWindow) {
-            expandToggle.kind = want
-            return
-        }
-        expandToggle.animate().scaleY(0f).setDuration(80).withEndAction {
-            expandToggle.kind = if (anyExpanded()) IconView.COLLAPSE_ALL else IconView.EXPAND_ALL
-            expandToggle.animate().scaleY(1f).setDuration(80).start()
-        }.start()
-    }
-
     private fun updateControls() {
-        updateExpandIcon()
         val canStart = monitoring.isRunning || idleGlobal || busyHeld
         if (monitoring.isRunning) {
             pingAllButton.text = "Parar"
@@ -499,10 +500,15 @@ class CondoPage(
         if (onlyErrors && row.state != OnuState.INSTAVEL && row.state != OnuState.SEM_RESPOSTA && row.state != OnuState.ERRO) {
             return false
         }
+        if (searchText.isNotEmpty()) {
+            if (!row.ip.contains(searchText, ignoreCase = true) &&
+                !row.identificacao.contains(searchText, ignoreCase = true)
+            ) return false
+        }
         return true
     }
 
-    private fun filterActive() = onlyErrors
+    private fun filterActive() = searchText.isNotEmpty() || onlyErrors
 
     private fun filterChanged() {
         if (filterActive()) {
@@ -553,7 +559,7 @@ class CondoPage(
             contentDescription = "Último ping da quadra teve perda"
             setOnClickListener { showFailureDialog(quadra) }
         }
-        val summary = ui.tv("", 13f, ui.muted).apply { setPadding(ui.dp(26), ui.dp(1), 0, 0) }
+        val summary = ui.tv("", 13f, ui.muted).apply { setPadding(ui.dp(26), ui.dp(2), 0, 0) }
         val button = ui.button("Pingar quadra", ui.softFill(ui.accent), ui.accentInk) { toggleQuadraPing(quadra) }
         button.textSize = 13f
         button.setPadding(ui.dp(12), 0, ui.dp(12), 0)
@@ -571,22 +577,17 @@ class CondoPage(
         top.addView(chevron, ui.lp(ui.dp(20), ui.dp(20)).apply { marginEnd = ui.dp(6) })
         top.addView(ui.tv("Quadra $quadra", 16f, ui.white, bold = true), ui.lp(-2, -2))
         top.addView(flag, ui.lp(ui.dp(9), ui.dp(9)).apply { marginStart = ui.dp(8) })
+        top.addView(View(activity), ui.lp(0, 1, 1f))
+        top.addView(button, ui.lp(-2, ui.dp(36)).apply { marginStart = ui.dp(8) })
 
-        val left = LinearLayout(activity).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(top, ui.lp(-1, -2))
-            addView(summary, ui.lp(-1, -2))
-        }
-        // O botão fica centralizado na altura do cartão (nome + resumo).
         val header = LinearLayout(activity).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(ui.dp(12), ui.dp(8), ui.dp(12), ui.dp(8))
+            orientation = LinearLayout.VERTICAL
+            setPadding(ui.dp(12), ui.dp(12), ui.dp(12), ui.dp(12))
             background = ui.rippled(Color.TRANSPARENT, 18f)
             isClickable = true
             setOnClickListener { toggleExpanded(quadra) }
-            addView(left, ui.lp(0, -2, 1f))
-            addView(button, ui.lp(-2, ui.dp(32)).apply { marginStart = ui.dp(8) })
+            addView(top, ui.lp(-1, -2))
+            addView(summary, ui.lp(-1, -2))
         }
 
         val card = LinearLayout(activity).apply {
@@ -607,7 +608,6 @@ class CondoPage(
         gv.chevron.animate().rotation(if (gs.expanded) 0f else -90f).setDuration(160).start()
         gv.rowsBox.visibility = if (gs.expanded) View.VISIBLE else View.GONE
         if (gs.expanded && !gv.built) buildRows(gv)
-        updateExpandIcon()
     }
 
     private fun buildRows(gv: GroupViews) {
@@ -692,12 +692,9 @@ class CondoPage(
         val down = list.count { it.state == OnuState.SEM_RESPOSTA || it.state == OnuState.ERRO }
         val unstable = list.count { it.state == OnuState.INSTAVEL }
 
-        // Só mostra o que tem problema, para o resumo caber numa linha ao lado do botão.
         val count = if (list.size == 1) "1 ONU" else "${list.size} ONUs"
-        val sb = StringBuilder("$count, $online online")
-        if (down > 0) sb.append(", $down sem resposta")
-        if (unstable > 0) sb.append(", $unstable instável(is)")
-        gv.summary.text = sb.toString()
+        val text = "$count, $online online, $down sem resposta"
+        gv.summary.text = if (unstable > 0) "$text, $unstable instável(is)" else text
         gv.flag.visibility = if (gs.failures.isNotEmpty()) View.VISIBLE else View.GONE
     }
 

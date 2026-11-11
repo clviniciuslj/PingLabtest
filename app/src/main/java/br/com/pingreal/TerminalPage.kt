@@ -149,7 +149,7 @@ class TerminalPage(
     init {
         view = LinearLayout(activity).apply { orientation = LinearLayout.VERTICAL }
         build()
-        // O campo começa sempre em branco; o último alvo só é usado para retomar o ping se o sistema matar o app.
+        hostInput.setText(host.prefs().getString(Prefs.HOST, "") ?: "")
         refreshButtons()
         updateStats()
     }
@@ -176,11 +176,16 @@ class TerminalPage(
 
     fun isPinging(): Boolean = run == Run.PING
 
-    /** Retoma o último ping depois que o sistema encerrou o app em segundo plano. */
-    fun resumePing() {
-        hostInput.setText(host.prefs().getString(Prefs.HOST, "") ?: "")
+    /** Preenche o campo com [ip] e começa a pingar (se não houver outro ping rodando). */
+    fun pingNow(ip: String) {
+        if (run != Run.IDLE) return
+        hostInput.setText(ip)
+        hostInput.setSelection(ip.length)
         startPing()
     }
+
+    /** Retoma o último ping depois que o sistema encerrou o app em segundo plano. */
+    fun resumePing() = startPing()
 
     fun applyKeepScreen() {
         if (run == Run.PING) host.setKeepScreenOn(host.prefs().getBoolean(Prefs.KEEP_SCREEN, true))
@@ -289,8 +294,8 @@ class TerminalPage(
             }
             true
         }
-        buttons.addView(runButton, ui.lp(0, ui.dp(44), 1f))
-        buttons.addView(traceButton, ui.lp(0, ui.dp(44), 1f).apply { marginStart = ui.dp(3) })
+        buttons.addView(runButton, ui.lp(0, ui.dp(52), 1f))
+        buttons.addView(traceButton, ui.lp(0, ui.dp(52), 1f).apply { marginStart = ui.dp(3) })
         view.addView(buttons, ui.lp(-1, -2).apply { topMargin = ui.dp(12) })
 
         // ---- gráfico (compacto, no meio) ----

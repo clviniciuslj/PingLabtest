@@ -16,6 +16,15 @@ interface PageHost {
     /** Abre o seletor de arquivos e entrega o texto do arquivo escolhido (CSV/TXT). */
     fun pickTextFile(onText: (String) -> Unit)
 
+    /** Vai para a aba Terminal e começa a pingar [ip]. */
+    fun pingInTerminal(ip: String)
+
+    /** Abre o chat com o assistente, com [snapshot] como contexto inicial. */
+    fun openChat(snapshot: DiagnosticSnapshot)
+
+    /** Abre o endereço no navegador. */
+    fun openUrl(url: String)
+
     fun shareText(text: String)
     fun copyText(text: String)
 

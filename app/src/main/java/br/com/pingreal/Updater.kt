@@ -29,7 +29,7 @@ sealed class UpdateResult {
 }
 
 /** Resposta crua do GitHub: código HTTP e corpo. */
-class HttpReply(val status: Int, val body: String)
+class HttpReply(val status: Int, val body: String, val viaMobile: Boolean = false)
 
 object Updater {
 

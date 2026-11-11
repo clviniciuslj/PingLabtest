@@ -42,6 +42,7 @@ class DiagnosticPage(
     private lateinit var diagButton: Button
     private lateinit var speedButton: Button
     private lateinit var shareButton: Button
+    private lateinit var chatButton: Button
     private lateinit var gauge: GaugeView
     private lateinit var speedDown: TextView
     private lateinit var speedUp: TextView
@@ -56,6 +57,12 @@ class DiagnosticPage(
         shareButton = ui.button("Enviar relatório", ui.softFill(ui.accent), ui.accentInk) { showShareDialog() }
         shareButton.visibility = View.GONE
         content.addView(shareButton, ui.lp(-1, ui.dp(52)).apply { topMargin = ui.dp(12) })
+
+        chatButton = ui.button("Conversar sobre esse diagnóstico", ui.softFill(ui.accent), ui.accentInk) {
+            currentSnapshot()?.let { host.openChat(it) }
+        }
+        chatButton.visibility = View.GONE
+        content.addView(chatButton, ui.lp(-1, ui.dp(52)).apply { topMargin = ui.dp(8) })
         content.addView(View(activity), ui.lp(-1, ui.dp(8)))
 
         view = ScrollView(activity).apply {
@@ -69,10 +76,11 @@ class DiagnosticPage(
 
     private fun buildDiagnosticCard(): View {
         val card = ui.card().apply { setPadding(ui.dp(16), ui.dp(16), ui.dp(16), ui.dp(6)) }
-        card.addView(ui.title("Diagnóstico da rede").apply { gravity = android.view.Gravity.CENTER }, ui.lp(-1, -2).apply { bottomMargin = ui.dp(16) })
+        card.addView(ui.title("Diagnóstico da rede"))
         diagButton = ui.button("Iniciar diagnóstico", ui.accent, ui.onAccent) {
             if (diagRunning) engine?.cancel() else startDiagnostic()
         }
+        card.addView(diagButton, ui.lp(-1, ui.dp(52)).apply { topMargin = ui.dp(12); bottomMargin = ui.dp(18) })
 
         val steps = DiagnosticEngine.STEP_TITLES
         for ((index, step) in steps.withIndex()) {
@@ -111,14 +119,12 @@ class DiagnosticPage(
             card.addView(row, ui.lp(-1, -2))
             rows[id] = Row(badge, detail, tip)
         }
-        // O botão fica embaixo, depois das etapas.
-        card.addView(diagButton, ui.lp(-1, ui.dp(52)).apply { topMargin = ui.dp(4); bottomMargin = ui.dp(10) })
         return card
     }
 
     private fun buildSpeedCard(): View {
         val card = ui.card().apply { setPadding(ui.dp(16), ui.dp(16), ui.dp(16), ui.dp(16)) }
-        card.addView(ui.title("Teste de velocidade").apply { gravity = android.view.Gravity.CENTER }, ui.lp(-1, -2))
+        card.addView(ui.title("Velocidade"))
 
         gauge = GaugeView(activity)
         card.addView(gauge, ui.lp(-1, -2).apply { topMargin = ui.dp(10) })
@@ -266,6 +272,7 @@ class DiagnosticPage(
         refreshButtons()
         resetRows()
         shareButton.visibility = View.GONE
+        chatButton.visibility = View.GONE
 
         val net = host.netInfo()
         lastNet = net
@@ -302,6 +309,7 @@ class DiagnosticPage(
 
         lastReport = report
         shareButton.visibility = View.VISIBLE
+        chatButton.visibility = View.VISIBLE
     }
 
     // ------------------------------------------------------------------ velocidade
@@ -327,6 +335,7 @@ class DiagnosticPage(
         speedRunning = true
         refreshButtons()
         shareButton.visibility = View.GONE
+        chatButton.visibility = View.GONE
         for (t in listOf(speedDown, speedUp, speedPing, speedJitter)) t.text = "—"
         lastNet = host.netInfo()
         lastAt = Date()
@@ -396,6 +405,7 @@ class DiagnosticPage(
         if (result.downMbps > 0 || result.upMbps > 0) {
             lastSpeed = result
             shareButton.visibility = View.VISIBLE
+            chatButton.visibility = View.VISIBLE
         }
     }
 
@@ -430,6 +440,9 @@ class DiagnosticPage(
         }
         return sb.toString().trimEnd()
     }
+
+    /** O que o chat recebe: a rede, as etapas e a velocidade do último teste. Null se ainda não há nada. */
+    fun currentSnapshot(): DiagnosticSnapshot? = DiagnosticSnapshot.from(lastNet, lastReport, lastSpeed, lastAt)
 
     private fun fullText(): String {
         val date = SimpleDateFormat("dd/MM/yyyy HH:mm:ss", Locale("pt", "BR")).format(lastAt ?: Date())
